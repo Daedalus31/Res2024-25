@@ -1,18 +1,32 @@
-import os
-import pandas as pd
-folder_path = r"C:/Users/aryam/Downloads/SeniorResProj/ImportantFile"
+folder_path = r"C:/Users/aryam/OneDrive/Documents/OriginalData"
+output_folder = r"C:/Users/aryam/OneDrive/Desktop/SatelliteData"
 
 def process_file(file_path):
-  with open(file_path, 'r') as file:
-    lines = file.readlines()
-    data = [line.split() for line in lines]
-    df = pd.DataFrame(data)
-  return df
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+        data = []
+        for line in lines:
+            processed_line = []
+            for item in line.split():
+                if item.lower() in ['NaN', '-NaN']:
+                        processed_line.append(np.nan)
+                try:
+                    cleaned_item = re.sub(r'[^0-9.eE-]+', '', item)
+                    if cleaned_item:
+                        processed_line.append(float(cleaned_item))
+                    else:
+                        processed_line.append(np.nan)
+                except ValueError:
+                    processed_line.append(np.nan)
+            data.append(processed_line)
+        df = pd.DataFrame(data)
+    return df
 
-for filename in os.listdr(folder_path):
-  file_path = os.path.join(folder_path, filename)
-  if os.path.isfile(file_path):
-    file_data = process_file(file_path)
-    output_excel_file = os.path.join(folder_path, f"{os.path.splitext(filename)[0]}.xlsx")
-    file_data.to_excel(output_excel_file, index = False, header = False)
-    print(f"Data from '{filename}' has been written to '{output_excel_file}' successfully.")
+for filename in os.listdir(folder_path):
+    file_path = os.path.join(folder_path, filename)
+
+    if os.path.isfile(file_path):
+        file_data = process_file(file_path)
+        output_excel_file = os.path.join(output_folder, f"{os.path.splitext(filename)[0]}.xlsx")
+        file_data.to_excel(output_excel_file, index = False, header = False)
+        print(f"Data from '{filename} has been written to '{output_excel_file}' successfully.")
