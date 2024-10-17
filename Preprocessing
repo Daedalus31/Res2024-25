@@ -13,9 +13,11 @@ def convert(yearDay, timeOfDay):
     time = timedelta(seconds = int(timeOfDay))
     return datetime(year,1,1) + timedelta(days = day - 1) + time
 
-def fixNan(df, column):
-    df[column] = df[column].fillna((df[column].shift(1) + df[column].shift(-1)) / 2)
-    return df 
+def fixNaN(df):
+    for col in df.columns:
+        if df[col].isnull().any():
+            df[col] = df[col].fillna((df[col].shift(1)+df[col].shift(-1)) / 2)
+    return df
 
 def processFile(file):
     df = pd.read_excel(file)
@@ -68,7 +70,14 @@ def visualize(df, columnsToPlot, title):
 def durations(df, qualityFlagColumns):
     df['TimeDiff'] = df['DateTime'].diff().fillna(pd.Timedelta(seconds = 0))
     df['FlagGroup'] = (df[qualityFlagColumns] != df[qualityFlagColumns].shift()).cumsum()
-    noisyData = df[df[qualityFlagColumns] == 4]
+    flagCount = {}
+    for flag in qualityFlagColumns:
+        if flag in df.columns:
+            count = (df[flag] == 4).sum()
+            flagCount[flag] = count
+            print(f"Occurrences of {flag} == 4: {count}")
+    noisyData = df[df[qualityFlagColumns].eq(4).any(axis = 1)]
+    noisyData['FlagGroup'] = (noisyData[qualityFlagColumns] != noisyData[qualityFlagColumns].shift()).cumsum()
     noisyDuration = noisyData.groupby('FlagGroup')['TimeDiff'].sum()
 
     print(f"Statistics Stuff:")
@@ -79,12 +88,13 @@ def durations(df, qualityFlagColumns):
     return noisyDuration
 
 def analyzeDurations(df, qualityFlagColumns):
+    df = fixNaN(df)
     durationTime = {}
-    df = fixNan(df, column)
     for flag in qualityFlagColumns:
-        noiseDuration = durations(df, [flag])
-        meanDuration = noiseDuration.dt.total_seconds().mean()
-        durationTime[flag] = int(meanDuration)
+        if flag in df.columns:
+            noiseDuration = durations(df, [flag])
+            meanDuration = noiseDuration.dt.total_seconds().mean()
+            durationTime[flag] = int(meanDuration)
     return durationTime
 
 def printDuration(noisyDurations, flagColumnName):
@@ -134,9 +144,10 @@ def processCombinedFile(combineData, durationTime):
     newDf.to_csv('NoisyData.csv', index = False)
     print("Finished processing NoisyData")
 
-for column in qualityFlagColumns:
-    if column in combineData.columns:
-        combineData = fixNan(combineData, column)
 
 durationTime = analyzeDurations(combineData, qualityFlagColumns)
 processCombinedFile(combineData, durationTime)
+
+for column in qualityFlagColumns:
+    if column in combineData.columns:
+        combineData = fixNaN(combineData)
