@@ -1,0 +1,142 @@
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+from datetime import datetime, timedelta
+from tqdm import tqdm
+tqdm.pandas()
+
+def convert(yearDay, timeOfDay):
+    yearDay = f"{yearDay:07.0f}"
+    year = int(str(yearDay)[:4])
+    day = int(str(yearDay)[4:])
+    time = timedelta(seconds = int(timeOfDay))
+    return datetime(year,1,1) + timedelta(days = day - 1) + time
+
+def fixNan(df, column):
+    df[column] = df[column].fillna((df[column].shift(1) + df[column].shift(-1)) / 2)
+    return df 
+
+def processFile(file):
+    df = pd.read_excel(file)
+    df['DateTime'] = df.progress_apply(lambda row: convert(row['Year/Day'], row['Time of Day']), axis = 1)
+    df = df.dropna(subset = ['DateTime'])
+    columns = [col for col in df.columns if col not in ['Year/Day', 'Time of Day']]
+    return df[columns]
+
+def processFolder(folder):
+    allData = []
+    files = os.listdir(folder)
+    for file in tqdm(files, desc = "Processing Files"):
+        file = os.path.join(folder, file)
+        processedData = processFile(file)
+        if processedData is not None and not processedData.empty:
+            allData.append(processedData)
+    return pd.concat(allData, ignore_index = True)
+
+def visualize(df, columnsToPlot, title):
+    print(f"Starting visualization for: {title}")
+    fig, ax = plt.subplots(figsize = (24,8))
+    plt.subplots_adjust(bottom = 0.25)
+    line, = ax.plot(df['DateTime'], df[columnsToPlot], label = columnsToPlot)
+    ax.set_title(title)
+    ax.set_xlabel('DateTime')
+    ax.set_ylabel('Value')
+    ax.tick_params(axis = 'x', rotation = 45)
+    axcolor = 'lightgoldenrodyellow'
+    axpos = plt.axes([0.2, 0.1, 0.6, 0.03], facecolor = axcolor)
+    axspacing = plt.axes([0.2, 0.15, 0.6, 0.03], facecolor = axcolor)
+    spos = Slider(axpos, 'Position', 0, len(df) - 1, valinit = 0, valstep = 1)
+    sspacing = Slider(axspacing, 'X-axis Spacing', 1, 100, valinit = 1, valstep = 1)
+    def update(val):
+        pos = int(spos.val)
+        spacing = int(sspacing.val)
+        start =  max(0, pos)
+        end = min(len(df), start + 7000)
+        ax.clear()
+        ax.plot(df['DateTime'][start:end:spacing], df[columnsToPlot][start:end:spacing])
+        ax.set_title(title)
+        ax.set_xlabel('DateTime')
+        ax.set_ylabel('Value')
+        ax.tick_params(axis = 'x', rotation = 45)
+        fig.canvas.draw_idle()
+    spos.on_changed(update)
+    sspacing.on_changed(update)
+    plt.show()
+    print(f"Finished visualization for: {title}")
+
+def durations(df, qualityFlagColumns):
+    df['TimeDiff'] = df['DateTime'].diff().fillna(pd.Timedelta(seconds = 0))
+    df['FlagGroup'] = (df[qualityFlagColumns] != df[qualityFlagColumns].shift()).cumsum()
+    noisyData = df[df[qualityFlagColumns] == 4]
+    noisyDuration = noisyData.groupby('FlagGroup')['TimeDiff'].sum()
+
+    print(f"Statistics Stuff:")
+    print(f"Count: {len(noisyDuration)}")
+    print(f"Mean Duration: {noisyDuration.dt.total_seconds().mean()}")
+    print(f"Median Duration: {noisyDuration.dt.total_seconds().median()}")
+    print(f"Total Duration: {noisyDuration.dt.total_seconds().sum()}")
+    return noisyDuration
+
+def analyzeDurations(df, qualityFlagColumns):
+    durationTime = {}
+    df = fixNan(df, column)
+    for flag in qualityFlagColumns:
+        noiseDuration = durations(df, [flag])
+        meanDuration = noiseDuration.dt.total_seconds().mean()
+        durationTime[flag] = int(meanDuration)
+    return durationTime
+
+def printDuration(noisyDurations, flagColumnName):
+    print(f"\nNoisy Durations for {flagColumnName}")
+    print(noisyDurations.dt.total_seconds())
+
+def noisyDuration(durations, flagColumnName):
+    plt.figure(figsize = (10,6))
+    plt.hist(durations.dt.total_seconds(), bins = 30, color = 'red', alpha = 0.7)
+    plt.title(f"Distribution of Noisy Data Event Durations ({flagColumnName})")
+    plt.xlabel("Duration (seconds)")
+    plt.ylabel("Frequency")
+    plt.show()
+
+
+
+folder = "C:/Users/aryam/OneDrive/Desktop/SatelliteData"
+combinedFile = 'combinedFile.csv'
+
+if os.path.exists(combinedFile):
+    print(f"Loading existing combined data from {combinedFile}")
+    combineData = pd.read_csv(combinedFile)
+else:
+    print(f"Processing folder: {folder}")
+    combineData = processFolder(folder)
+    combineData = combineData.sort_values('DateTime')
+    combineData.to_csv(combinedFile, index = False)
+    print(f"Combined data saved to {combinedFile}")
+
+combineData['DateTime'] = pd.to_datetime(combineData['DateTime'])
+qualityFlagColumns = ['Quality Flag (Ion Temp)', 'Quality Flag (Vx)', 
+                      'Quality Flag (O+)', 'Quality Flag (H+)', 
+                      'Quality Flag (He+)', 'Quality Flag (IDM)']
+
+
+def processCombinedFile(combineData, durationTime):
+    rows = []
+    timestamps = combineData['DateTime']
+    values = combineData.iloc[:, 1:]
+    for start in range(len(values) - durationTime):
+        end = start + durationTime
+        arrayValues = values.iloc[start:end].values.flatten()
+        timeStart = timestamps[start]
+        timeEnd = timestamps[end - 1]
+        rows.append(list(arrayValues) + [timeStart, timeEnd])
+    newDf = pd.DataFrame(rows)
+    newDf.to_csv('NoisyData.csv', index = False)
+    print("Finished processing NoisyData")
+
+for column in qualityFlagColumns:
+    if column in combineData.columns:
+        combineData = fixNan(combineData, column)
+
+durationTime = analyzeDurations(combineData, qualityFlagColumns)
+processCombinedFile(combineData, durationTime)
