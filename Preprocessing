@@ -1,86 +1,71 @@
 import os
+import csv
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from tqdm import tqdm
+from minisom import MiniSom
+
 tqdm.pandas()
 
 def convert(yearDay, timeOfDay):
     yearDay = f"{yearDay:07.0f}"
     year = int(str(yearDay)[:4])
     day = int(str(yearDay)[4:])
-    time = timedelta(seconds = int(timeOfDay))
-    return datetime(year,1,1) + timedelta(days = day - 1) + time
+    time = timedelta(seconds=int(timeOfDay))
+    return datetime(year, 1, 1) + timedelta(days=day - 1) + time
 
 def fixNaN(df):
     for col in df.columns:
         if df[col].isnull().any():
-            df[col] = df[col].fillna((df[col].shift(1)+df[col].shift(-1)) / 2)
+            df[col] = df[col].fillna((df[col].shift(1) + df[col].shift(-1)) / 2)
     return df
 
 def processFile(file):
-    df = pd.read_excel(file)
-    df['DateTime'] = df.progress_apply(lambda row: convert(row['Year/Day'], row['Time of Day']), axis = 1)
-    df = df.dropna(subset = ['DateTime'])
+    df = pd.read_excel(file)  
+    df['DateTime'] = df.progress_apply(lambda row: convert(row['Year/Day'], row['Time of Day']), axis=1)
+    df = df.dropna(subset=['DateTime'])
     columns = [col for col in df.columns if col not in ['Year/Day', 'Time of Day']]
     df = df[columns]
-    return fixNaN(df)  
+    return fixNaN(df)
 
 def processFolder(folder):
     allData = []
     files = os.listdir(folder)
-    for file in tqdm(files, desc = "Processing Files"):
+    for file in tqdm(files, desc="Processing Files"):
         file = os.path.join(folder, file)
         processedData = processFile(file)
         if processedData is not None and not processedData.empty:
             allData.append(processedData)
-    return pd.concat(allData, ignore_index = True)
+    return pd.concat(allData, ignore_index=True)
 
-def durations(df, qualityFlagColumns):
-    df['TimeDiff'] = df['DateTime'].diff().fillna(pd.Timedelta(seconds = 0))
-    noisyData = df[df[qualityFlagColumns].eq(4).any(axis = 1)].copy()
-    noisyData['FlagGroup'] = (noisyData[qualityFlagColumns] != noisyData[qualityFlagColumns].shift()).any(axis=1).cumsum()
-    
-    flagCount = {}
-    for flag in qualityFlagColumns:
-        if flag in df.columns:
-            count = (df[flag] == 4).sum()
-            flagCount[flag] = count
-            print(f"Occurrences of {flag} == 4: {count}")
-    
-    noisyDuration = noisyData.groupby('FlagGroup')['TimeDiff'].sum()
 
-    print(f"Statistics Stuff:")
-    print(f"Count: {len(noisyDuration)}")
-    print(f"Mean Duration: {noisyDuration.dt.total_seconds().mean():.2f}")
-    print(f"Median Duration: {noisyDuration.dt.total_seconds().median():.2f}")
-    print(f"Total Duration: {noisyDuration.dt.total_seconds().sum():.2f}")
-    return noisyDuration
+def processSlidingWindow(df, windowSize, batchPercent):
+    totalRows = len(df) - windowSize
+    batchSize = max(1, int(totalRows * (batchPercent // 100)))
+    numOfBatches = (totalRows + batchSize - 1) // batchSize
+    cols = [f'V[{i+1}]' for i in range(windowSize)] + ['Start Time', 'End Time']
+    with open('SlidingWindow.csv', 'w', newline = '') as f:
+        writer = csv.writer(f)
+        writer.writerow(cols)
+        for batchStart in tqdm(range(0, totalRows, batchSize), total = numOfBatches, desc = 'Processing Batches'):
+            batchEnd = min(batchStart + batchSize + windowSize, len(df))
+            batch = df.iloc[batchStart:batchEnd]
+            timestamps = batch['DateTime']
+            values = batch.drop(['DateTime'], axis = 1)
+            rows = []
+            for start in range(min(batchSize, len(values) - windowSize)):
+                end = start + windowSize
+                windowValues = values.iloc[start:end].values.flatten()
+                startTime = timestamps.iloc[start]
+                endTime = timestamps.iloc[end - 1]
+                rows.append(list(windowValues) + [startTime, endTime])
+            writer.writerows(rows)
+        print("Sliding window saved as 'SlidingWindowTable.csv'")
+            
 
-def analyzeDurations(df, qualityFlagColumns):
-    durationTime = {}
-    for flag in qualityFlagColumns:
-        if flag in df.columns:
-            print(f"\nAnalyzing {flag}")
-            noiseDuration = durations(df, [flag])
-            meanDuration = noiseDuration.dt.total_seconds().mean()
-            durationTime[flag] = int(meanDuration)
-    return durationTime
 
-def processCombinedFile(combineData, durationTime):
-    maxDuration = max(durationTime.values())
-    rows = []
-    timestamps = combineData['DateTime']
-    values = combineData.iloc[:, 1:]
-    for start in tqdm(range(len(values) - maxDuration), desc="Processing rows"):
-        end = start + maxDuration
-        arrayValues = values.iloc[start:end].values.flatten()
-        timeStart = timestamps.iloc[start]
-        timeEnd = timestamps.iloc[end - 1]
-        rows.append(list(arrayValues) + [timeStart, timeEnd])
-    newDf = pd.DataFrame(rows)
-    newDf.to_csv('NoisyData.csv', index = False)
-    print("Finished processing NoisyData")
+
 
 folder = "C:/Users/aryam/OneDrive/Desktop/SatelliteData"
 combinedFile = 'combinedFile.csv'
@@ -88,19 +73,17 @@ combinedFile = 'combinedFile.csv'
 if os.path.exists(combinedFile):
     print(f"Loading existing combined data from {combinedFile}")
     combineData = pd.read_csv(combinedFile, parse_dates=['DateTime'])
-    combineData = fixNaN(combineData)  
+    combineData = fixNaN(combineData)
 else:
     print(f"Processing folder: {folder}")
     combineData = processFolder(folder)
     combineData = combineData.sort_values('DateTime')
-    combineData.to_csv(combinedFile, index = False)
+    combineData.to_csv(combinedFile, index=False)
     print(f"Combined data saved to {combinedFile}")
 
-qualityFlagColumns = ['Quality Flag (Ion Temp)', 'Quality Flag (Vx)', 
-                      'Quality Flag (O+)', 'Quality Flag (H+)', 
-                      'Quality Flag (He+)', 'Quality Flag (IDM)']
+windowSize = 60
 
-durationTime = analyzeDurations(combineData, qualityFlagColumns)
-processCombinedFile(combineData, durationTime)
+sliding_window_table = processSlidingWindow(combineData, windowSize, 5)
+
 
 print("Processing complete.")
