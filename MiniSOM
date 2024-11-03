@@ -1,0 +1,23 @@
+import pandas as pd
+from minisom import MiniSom
+import numpy as np
+import pickle
+
+file_path = '/content/drive/MyDrive/BalancedSlidingWindows.csv'
+data = pd.read_csv(file_path)
+
+print("Column names in the dataset:", data.columns.tolist())
+
+columns_to_exclude = [col for col in data.columns if 't[' in col] + ['e']  
+subset_data = data.drop(columns=columns_to_exclude)
+
+som = MiniSom(25, 25, input_len=subset_data.shape[1], sigma=1.0, learning_rate=0.5)
+som.random_weights_init(subset_data.values)
+
+som.train_random(subset_data.values, 5000)  
+
+model_path = '/content/drive/MyDrive/trained_som.pkl'
+with open(model_path, 'wb') as f:
+    pickle.dump(som, f)
+
+print(f"Trained SOM model saved to {model_path}")
